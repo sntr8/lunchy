@@ -3,13 +3,21 @@ date_default_timezone_set('Europe/Helsinki');
 define('CACHE', sys_get_temp_dir() . '/lunchy');
 define('TTL', 7200);
 
-$dow      = (int)date('N');
-$day_s    = ['','ma','ti','ke','to','pe','la','su'][$dow];
-$day_l    = ['','maanantai','tiistai','keskiviikko','torstai','perjantai','lauantai','sunnuntai'][$dow];
-$weekday  = ['','Maanantai','Tiistai','Keskiviikko','Torstai','Perjantai','Lauantai','Sunnuntai'][$dow];
-$date_str = date('j.n.Y');
-$is_wd    = $dow >= 1 && $dow <= 5;
-$refresh  = isset($_GET['r']);
+$offset    = max(0, min(7, (int)($_GET['d'] ?? 0)));
+$target_ts = mktime(0, 0, 0, (int)date('n'), (int)date('j') + $offset, (int)date('Y'));
+$dow       = (int)date('N', $target_ts);
+$day_s     = ['','ma','ti','ke','to','pe','la','su'][$dow];
+$day_l     = ['','maanantai','tiistai','keskiviikko','torstai','perjantai','lauantai','sunnuntai'][$dow];
+$weekday   = ['','Maanantai','Tiistai','Keskiviikko','Torstai','Perjantai','Lauantai','Sunnuntai'][$dow];
+$date_str  = date('j.n.Y', $target_ts);
+$is_wd     = $dow >= 1 && $dow <= 5;
+$refresh   = isset($_GET['r']);
+
+// Next weekday offset (skip weekends)
+$next_offset = $offset + 1;
+while ($next_offset <= 7 && (int)date('N', mktime(0,0,0,(int)date('n'),(int)date('j')+$next_offset,(int)date('Y'))) > 5)
+    $next_offset++;
+$has_next = $next_offset <= 7;
 
 function fetch(string $url, bool $force = false, bool $ssl_verify = true): ?string {
     @mkdir(CACHE, 0755, true);
@@ -412,11 +420,19 @@ h1{font-size:15px;font-weight:bold;text-transform:uppercase;letter-spacing:.08em
 .no-lunch{color:#666;font-style:italic}
 footer{margin-top:40px;padding-top:10px;border-top:1px solid #ddd;font-size:11px;color:#aaa}
 footer a{color:#aaa}
+.day-nav{margin-bottom:24px;font-size:12px}
+.day-nav a{color:#111;text-decoration:none;border-bottom:1px solid #111}
+.day-nav a:hover{color:#555;border-color:#555}
 @media(max-width:500px){body{font-size:13px}.grid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
 <h1>Lounaat &mdash; <?= htmlspecialchars($weekday) ?> <?= $date_str ?></h1>
+
+<div class="day-nav">
+  <?php if ($offset > 0): ?><a href="?d=0">Tänään</a> &nbsp;&middot;&nbsp; <?php endif ?>
+  <?php if ($has_next): ?><a href="?d=<?= $next_offset ?>">Seuraava päivä &rarr;</a><?php endif ?>
+</div>
 
 <?php if (!$is_wd): ?>
 <p class="no-lunch">Viikonloppu &mdash; useimmilla ravintoloilla ei lounasta.</p>
