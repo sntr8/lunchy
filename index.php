@@ -3,7 +3,8 @@ date_default_timezone_set('Europe/Helsinki');
 define('CACHE', sys_get_temp_dir() . '/lunchy');
 define('TTL', 7200);
 
-$offset    = max(0, min(7, (int)($_GET['d'] ?? 0)));
+$today_dow = (int)date('N');
+$offset    = ($today_dow < 5 && isset($_GET['d'])) ? 1 : 0; // only allow +1 on Mon–Thu
 $target_ts = mktime(0, 0, 0, (int)date('n'), (int)date('j') + $offset, (int)date('Y'));
 $dow       = (int)date('N', $target_ts);
 $day_s     = ['','ma','ti','ke','to','pe','la','su'][$dow];
@@ -12,12 +13,7 @@ $weekday   = ['','Maanantai','Tiistai','Keskiviikko','Torstai','Perjantai','Laua
 $date_str  = date('j.n.Y', $target_ts);
 $is_wd     = $dow >= 1 && $dow <= 5;
 $refresh   = isset($_GET['r']);
-
-// Next weekday offset (skip weekends)
-$next_offset = $offset + 1;
-while ($next_offset <= 7 && (int)date('N', mktime(0,0,0,(int)date('n'),(int)date('j')+$next_offset,(int)date('Y'))) > 5)
-    $next_offset++;
-$has_next = $next_offset <= 7;
+$show_nav  = $today_dow >= 1 && $today_dow <= 4; // Mon–Thu only
 
 function fetch(string $url, bool $force = false, bool $ssl_verify = true): ?string {
     @mkdir(CACHE, 0755, true);
@@ -429,10 +425,15 @@ footer a{color:#aaa}
 <body>
 <h1>Lounaat &mdash; <?= htmlspecialchars($weekday) ?> <?= $date_str ?></h1>
 
+<?php if ($show_nav): ?>
 <div class="day-nav">
-  <?php if ($offset > 0): ?><a href="?d=0">Tänään</a> &nbsp;&middot;&nbsp; <?php endif ?>
-  <?php if ($has_next): ?><a href="?d=<?= $next_offset ?>">Seuraava päivä &rarr;</a><?php endif ?>
+  <?php if ($offset === 0): ?>
+    <a href="?d=1">Huominen &rarr;</a>
+  <?php else: ?>
+    <a href="?">Tänään</a>
+  <?php endif ?>
 </div>
+<?php endif ?>
 
 <?php if (!$is_wd): ?>
 <p class="no-lunch">Viikonloppu &mdash; useimmilla ravintoloilla ei lounasta.</p>
