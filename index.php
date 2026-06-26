@@ -353,32 +353,26 @@ function parse_koulu(string $html, string $day_s, string $day_l): array {
     return [];
 }
 
-// Lounastaja RSS parser — used for Roslund (Teurastamon Portti)
-function parse_lounastaja_rss(string $xml, int $dow): array {
-    $rss = @simplexml_load_string($xml);
-    if (!$rss) return [];
-    $items = [];
-    foreach ($rss->channel->item as $item) {
-        $ts = strtotime((string)$item->pubDate);
-        if (!$ts || (int)date('N', $ts) !== $dow) continue;
-        $desc = (string)$item->description;
-        $parts = preg_split('/<br\s*\/?>/i', $desc);
-        $out = []; $last = null;
-        foreach ($parts as $part) {
-            if (preg_match('/<i[^>]*>\s*<small[^>]*>(.*?)<\/small>\s*<\/i>/is', $part, $m)) {
-                $sub = trim(strip_tags($m[1]));
-                if ($last !== null) {
-                    $out[] = ['title' => $last, 'desc' => $sub];
-                    $last = null;
-                }
-            } else {
-                if ($last !== null) $out[] = ['title' => $last, 'desc' => ''];
-                $t = trim(strip_tags($part));
-                $last = strlen($t) > 3 ? $t : null;
-            }
+// Lounastaja JSON parser — used for Roslund (Teurastamon Portti)
+function parse_lounastaja_json(string $json, int $dow): array {
+    $data = json_decode($json, true);
+    if (!$data || empty($data['success']) || !isset($data['data']['week']['days'])) return [];
+    foreach ($data['data']['week']['days'] as $day) {
+        if (($day['dayNumber'] ?? 0) !== $dow) continue;
+        if (!empty($day['isClosed'])) return [];
+        $items = [];
+        foreach ($day['lunches'] ?? [] as $lunch) {
+            $title = trim($lunch['title']['fi'] ?? '');
+            if (!$title) continue;
+            $allergens = implode(', ', array_map(fn($a) => $a['abbreviation']['fi'], $lunch['allergens'] ?? []));
+            if ($allergens) $title .= ' (' . $allergens . ')';
+            $price = $lunch['normalPrice']['price'] ?? '';
+            $unit  = $lunch['normalPrice']['unit']['fi'] ?? '€';
+            if ($price) $title .= ' ' . $price . ' ' . $unit;
+            $desc = trim($lunch['description']['fi'] ?? '');
+            $items[] = ['title' => $title, 'desc' => $desc];
         }
-        if ($last !== null) $out[] = ['title' => $last, 'desc' => ''];
-        return $out;
+        return $items;
     }
     return [];
 }
@@ -411,7 +405,6 @@ function parse_lime_leaf(string $html, string $day_l): array {
             if (preg_match('/^(jäätelö|kahvi|tee\b)/iu', $l)) continue;
             $items[] = ['title' => $l, 'desc' => ''];
         }
-        if ($items) break;
     }
     return $items;
 }
@@ -467,8 +460,8 @@ if ($city === 'turku') {
         if ($items) $cards[] = ['name' => 'Koulu', 'url' => 'https://www.panimoravintolakoulu.fi/lounas/', 'items' => $items, 'hours' => '11–14', 'price' => $kprice];
     }
 } else {
-    if ($is_wd && ($xml = fetch('https://lounastaja.app/api/v1/rss/week/6caa04b4-245e-483a-a36d-55f7b2a2ddd1/active?language=fi', $refresh))) {
-        $items = parse_lounastaja_rss($xml, $dow);
+    if ($is_wd && ($json = fetch('https://lounastaja.app/api/v1/widget/6caa04b4-245e-483a-a36d-55f7b2a2ddd1/ufCi2XUGEyE20Owmd4nt', $refresh))) {
+        $items = parse_lounastaja_json($json, $dow);
         if ($items) $cards[] = ['name' => 'Roslund', 'url' => 'https://roslund.fi/pages/ravintola', 'items' => $items, 'hours' => '11–15'];
     }
     if ($is_wd && ($html = fetch('https://limerestaurants.fi/lime-leaf-lounas/', $refresh))) {
