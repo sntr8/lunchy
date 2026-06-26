@@ -331,6 +331,7 @@ function parse_koulu(string $html, string $day_s, string $day_l): array {
                 if (preg_match('/^(lounaan voit|voit hakea|meiltä saat|alkuperämaat|pidätämme|tervetuloa|olemme auki|keittiömme|kysy lisää|panimoravintola)/iu', $l)) break;
                 $out[] = $l;
             }
+        }
         if (!$out) { $pos = $wpos + 1; continue; }
         $skip = '/^(keittolounas|noutopöytä|koko lounas|molemmat|lounasbuffet|lounaalla|klo |arkisin|€|www\.|^\d+\.\d+\.)/iu';
         $items = [];
