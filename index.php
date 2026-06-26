@@ -15,6 +15,13 @@ $is_wd     = $dow >= 1 && $dow <= 5;
 $refresh   = isset($_GET['r']);
 $show_nav  = $today_dow >= 1 && $today_dow <= 4; // Mon–Thu only
 
+if (isset($_GET['city']) && in_array($_GET['city'], ['turku', 'helsinki'], true)) {
+    setcookie('lunchy_city', $_GET['city'], time() + 365 * 24 * 3600, '/');
+    header('Location: ' . ($offset ? '?d=1' : '?'));
+    exit;
+}
+$city = $_COOKIE['lunchy_city'] ?? 'turku';
+
 function fetch(string $url, bool $force = false, bool $ssl_verify = true): ?string {
     @mkdir(CACHE, 0755, true);
     $f = CACHE . '/' . md5($url);
@@ -346,54 +353,129 @@ function parse_koulu(string $html, string $day_s, string $day_l): array {
     return [];
 }
 
+// Lounastaja RSS parser — used for Roslund (Teurastamon Portti)
+function parse_lounastaja_rss(string $xml, int $dow): array {
+    $rss = @simplexml_load_string($xml);
+    if (!$rss) return [];
+    $items = [];
+    foreach ($rss->channel->item as $item) {
+        $ts = strtotime((string)$item->pubDate);
+        if (!$ts || (int)date('N', $ts) !== $dow) continue;
+        $desc = (string)$item->description;
+        $parts = preg_split('/<br\s*\/?>/i', $desc);
+        $out = []; $last = null;
+        foreach ($parts as $part) {
+            if (preg_match('/<i[^>]*>\s*<small[^>]*>(.*?)<\/small>\s*<\/i>/is', $part, $m)) {
+                $sub = trim(strip_tags($m[1]));
+                if ($last !== null) {
+                    $out[] = ['title' => $last, 'desc' => $sub];
+                    $last = null;
+                }
+            } else {
+                if ($last !== null) $out[] = ['title' => $last, 'desc' => ''];
+                $t = trim(strip_tags($part));
+                $last = strlen($t) > 3 ? $t : null;
+            }
+        }
+        if ($last !== null) $out[] = ['title' => $last, 'desc' => ''];
+        return $out;
+    }
+    return [];
+}
+
+// Lime Leaf parser — WordPress, days grouped in <strong> headings
+function parse_lime_leaf(string $html, string $day_l): array {
+    libxml_use_internal_errors(true);
+    $dom = new DOMDocument();
+    @$dom->loadHTML('<?xml encoding="UTF-8">' . $html);
+    $xp = new DOMXPath($dom);
+    $day_lc = mb_strtolower($day_l);
+    $paras = [];
+    foreach ($xp->query('//div[contains(@class,"entry-content")]//p') as $p) $paras[] = $p;
+    $found = null;
+    for ($i = 0; $i < count($paras); $i++) {
+        $strongs = $xp->query('.//strong', $paras[$i]);
+        if (!$strongs->length) continue;
+        if (str_contains(mb_strtolower($strongs->item(0)->textContent), $day_lc)) { $found = $i; break; }
+    }
+    if ($found === null) return [];
+    $items = [];
+    for ($i = $found + 1; $i < count($paras); $i++) {
+        $p = $paras[$i];
+        $strongs = $xp->query('.//strong', $p);
+        if ($strongs->length && preg_match('/maanantai|tiistai|keskiviikko|torstai|perjantai|lauantai|sunnuntai/iu', $strongs->item(0)->textContent)) break;
+        $lines = html_to_lines($dom->saveHTML($p));
+        foreach ($lines as $l) {
+            if (strlen($l) < 4) continue;
+            if (mb_stripos($l, 'salaattipöytä') !== false) continue;
+            if (preg_match('/^(jäätelö|kahvi|tee\b)/iu', $l)) continue;
+            $items[] = ['title' => $l, 'desc' => ''];
+        }
+        if ($items) break;
+    }
+    return $items;
+}
+
 // --- Build cards ---
 $cards = [];
 
-if ($is_wd && ($html = fetch('https://www.ravintolaagnes.fi/lounas/', $refresh))) {
-    $items = parse_agnes($html);
-    if ($items) $cards[] = ['name' => 'Agnes', 'url' => 'https://www.ravintolaagnes.fi/lounas/', 'items' => $items, 'hours' => '11–14'];
-}
-if ($is_wd && ($html = fetch('https://www.ravintolanobi.fi/lounas/', $refresh))) {
-    $items = parse_nobi($html, $day_l);
-    if ($items) $cards[] = ['name' => 'Nobi', 'url' => 'https://www.ravintolanobi.fi/lounas/', 'items' => $items, 'hours' => '11–14'];
-}
-if ($is_wd && ($html = fetch('https://fontana.fi/lunch/', $refresh))) {
-    $items = parse_day_id($html, 'fontana', $day_s, $day_l);
-    if ($items) $cards[] = ['name' => 'Fontana', 'url' => 'https://fontana.fi/lunch/', 'items' => $items, 'hours' => '11–14'];
-}
-if ($is_wd && ($html = fetch('https://www.matbar.fi/lounas/', $refresh))) {
-    $items = parse_day_id($html, 'matbar', $day_s, $day_l);
-    $tprice = preg_match('/Lounaspöydän hinta (\d+[,.]\d+|\d+)\s*€/iu', $html, $m) ? $m[1] . ' €' : '';
-    if ($items) $cards[] = ['name' => 'Tårget', 'url' => 'https://www.matbar.fi/lounas/', 'items' => $items, 'hours' => '11–15', 'price' => $tprice];
-}
-if ($is_wd && ($html = fetch('https://ditrevi.fi/lounas/', $refresh))) {
-    $items = parse_ditrevi($html, $day_s, $day_l);
-    if ($items) $cards[] = ['name' => 'di Trevi', 'url' => 'https://ditrevi.fi/lounas/', 'items' => $items, 'hours' => '11–14'];
-}
-if ($is_wd && ($html = fetch('https://www.brahenkellari.fi/fi/menu/lounas/lounaslista', $refresh, false))) {
-    $items = parse_brahenkellari($html, $day_l);
-    if ($items) $cards[] = ['name' => 'Brahen Kellari', 'url' => 'https://www.brahenkellari.fi/fi/menu/lounas/lounaslista', 'items' => $items, 'hours' => '11–14'];
-}
-if ($is_wd && ($bl = fetch('https://blanko.net/lounas', $refresh))) {
-    $items = parse_menu_block($bl, $day_s);
-    if ($items) $cards[] = ['name' => 'Blanko', 'url' => 'https://blanko.net/lounas', 'items' => $items, 'hours' => '11–15'];
-}
-if ($is_wd && ($ne = fetch('https://www.nera.fi/lounas', $refresh))) {
-    $items = parse_menu_block($ne, $day_s);
-    if ($items) $cards[] = ['name' => 'Nerå', 'url' => 'https://www.nera.fi/lounas', 'items' => $items, 'hours' => '11–14:30'];
-}
-if ($is_wd && ($ti = fetch('https://www.tinta.fi/lounas', $refresh))) {
-    $items = parse_tinta($ti, $day_s);
-    if ($items) $cards[] = ['name' => 'Tintå', 'url' => 'https://www.tinta.fi/lounas', 'items' => $items, 'hours' => '11–15'];
-}
-if ($is_wd && ($ro = fetch('https://rootskitchen.fi/kasvisruokalounas-turku/', $refresh))) {
-    $items = parse_roots($ro);
-    if ($items) $cards[] = ['name' => 'Roots', 'url' => 'https://rootskitchen.fi/kasvisruokalounas-turku/', 'items' => $items, 'hours' => '11–14'];
-}
-if ($is_wd && ($html = fetch('https://www.panimoravintolakoulu.fi/lounas/', $refresh))) {
-    $items = parse_koulu($html, $day_s, $day_l);
-    $kprice = preg_match('/KOKO NOUTOPÖYTÄ (\d+[,.]\d+|\d+)\s*€/iu', $html, $m) ? $m[1] . ' €' : '';
-    if ($items) $cards[] = ['name' => 'Koulu', 'url' => 'https://www.panimoravintolakoulu.fi/lounas/', 'items' => $items, 'hours' => '11–14', 'price' => $kprice];
+if ($city === 'turku') {
+    if ($is_wd && ($html = fetch('https://www.ravintolaagnes.fi/lounas/', $refresh))) {
+        $items = parse_agnes($html);
+        if ($items) $cards[] = ['name' => 'Agnes', 'url' => 'https://www.ravintolaagnes.fi/lounas/', 'items' => $items, 'hours' => '11–14'];
+    }
+    if ($is_wd && ($html = fetch('https://www.ravintolanobi.fi/lounas/', $refresh))) {
+        $items = parse_nobi($html, $day_l);
+        if ($items) $cards[] = ['name' => 'Nobi', 'url' => 'https://www.ravintolanobi.fi/lounas/', 'items' => $items, 'hours' => '11–14'];
+    }
+    if ($is_wd && ($html = fetch('https://fontana.fi/lunch/', $refresh))) {
+        $items = parse_day_id($html, 'fontana', $day_s, $day_l);
+        if ($items) $cards[] = ['name' => 'Fontana', 'url' => 'https://fontana.fi/lunch/', 'items' => $items, 'hours' => '11–14'];
+    }
+    if ($is_wd && ($html = fetch('https://www.matbar.fi/lounas/', $refresh))) {
+        $items = parse_day_id($html, 'matbar', $day_s, $day_l);
+        $tprice = preg_match('/Lounaspöydän hinta (\d+[,.]\d+|\d+)\s*€/iu', $html, $m) ? $m[1] . ' €' : '';
+        if ($items) $cards[] = ['name' => 'Tårget', 'url' => 'https://www.matbar.fi/lounas/', 'items' => $items, 'hours' => '11–15', 'price' => $tprice];
+    }
+    if ($is_wd && ($html = fetch('https://ditrevi.fi/lounas/', $refresh))) {
+        $items = parse_ditrevi($html, $day_s, $day_l);
+        if ($items) $cards[] = ['name' => 'di Trevi', 'url' => 'https://ditrevi.fi/lounas/', 'items' => $items, 'hours' => '11–14'];
+    }
+    if ($is_wd && ($html = fetch('https://www.brahenkellari.fi/fi/menu/lounas/lounaslista', $refresh, false))) {
+        $items = parse_brahenkellari($html, $day_l);
+        if ($items) $cards[] = ['name' => 'Brahen Kellari', 'url' => 'https://www.brahenkellari.fi/fi/menu/lounas/lounaslista', 'items' => $items, 'hours' => '11–14'];
+    }
+    if ($is_wd && ($bl = fetch('https://blanko.net/lounas', $refresh))) {
+        $items = parse_menu_block($bl, $day_s);
+        if ($items) $cards[] = ['name' => 'Blanko', 'url' => 'https://blanko.net/lounas', 'items' => $items, 'hours' => '11–15'];
+    }
+    if ($is_wd && ($ne = fetch('https://www.nera.fi/lounas', $refresh))) {
+        $items = parse_menu_block($ne, $day_s);
+        if ($items) $cards[] = ['name' => 'Nerå', 'url' => 'https://www.nera.fi/lounas', 'items' => $items, 'hours' => '11–14:30'];
+    }
+    if ($is_wd && ($ti = fetch('https://www.tinta.fi/lounas', $refresh))) {
+        $items = parse_tinta($ti, $day_s);
+        if ($items) $cards[] = ['name' => 'Tintå', 'url' => 'https://www.tinta.fi/lounas', 'items' => $items, 'hours' => '11–15'];
+    }
+    if ($is_wd && ($ro = fetch('https://rootskitchen.fi/kasvisruokalounas-turku/', $refresh))) {
+        $items = parse_roots($ro);
+        if ($items) $cards[] = ['name' => 'Roots', 'url' => 'https://rootskitchen.fi/kasvisruokalounas-turku/', 'items' => $items, 'hours' => '11–14'];
+    }
+    if ($is_wd && ($html = fetch('https://www.panimoravintolakoulu.fi/lounas/', $refresh))) {
+        $items = parse_koulu($html, $day_s, $day_l);
+        $kprice = preg_match('/KOKO NOUTOPÖYTÄ (\d+[,.]\d+|\d+)\s*€/iu', $html, $m) ? $m[1] . ' €' : '';
+        if ($items) $cards[] = ['name' => 'Koulu', 'url' => 'https://www.panimoravintolakoulu.fi/lounas/', 'items' => $items, 'hours' => '11–14', 'price' => $kprice];
+    }
+} else {
+    if ($is_wd && ($xml = fetch('https://lounastaja.app/api/v1/rss/week/6caa04b4-245e-483a-a36d-55f7b2a2ddd1/active?language=fi', $refresh))) {
+        $items = parse_lounastaja_rss($xml, $dow);
+        if ($items) $cards[] = ['name' => 'Roslund', 'url' => 'https://roslund.fi/pages/ravintola', 'items' => $items, 'hours' => '11–15'];
+    }
+    if ($is_wd && ($html = fetch('https://limerestaurants.fi/lime-leaf-lounas/', $refresh))) {
+        $items = parse_lime_leaf($html, $day_l);
+        $llprice = preg_match('/Arkisin[^€<]*?(\d+[,.]\d+)\s*€/iu', strip_tags($html), $m) ? $m[1] . ' €' : '';
+        if ($items) $cards[] = ['name' => 'Lime Leaf', 'url' => 'https://limerestaurants.fi/lime-leaf-lounas/', 'items' => $items, 'hours' => '11–15', 'price' => $llprice];
+    }
 }
 
 usort($cards, fn($a, $b) => strcasecmp($a['name'], $b['name']));
@@ -407,7 +489,11 @@ $fetched_at = date('H:i');
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#fff;color:#111;font-family:ui-monospace,'Cascadia Code','Courier New',monospace;font-size:14px;line-height:1.65;max-width:800px;margin:0 auto;padding:20px 16px 60px}
-h1{font-size:15px;font-weight:bold;text-transform:uppercase;letter-spacing:.08em;border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:28px}
+.page-header{display:flex;align-items:baseline;justify-content:space-between;border-bottom:2px solid #111;padding-bottom:8px;margin-bottom:28px}
+h1{font-size:15px;font-weight:bold;text-transform:uppercase;letter-spacing:.08em}
+.city-toggle{font-size:12px;white-space:nowrap;padding-left:16px}
+.city-toggle a{color:#111;text-decoration:none;border-bottom:1px solid #111}
+.city-toggle a:hover{color:#555;border-color:#555}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(340px,1fr));gap:24px}
 .card{border-left:3px solid #111;padding-left:12px}
 .card-name{font-size:12px;font-weight:bold;text-transform:uppercase;letter-spacing:.1em;margin-bottom:8px}
@@ -428,7 +514,15 @@ footer a{color:#aaa}
 </style>
 </head>
 <body>
-<h1>Lounaat &mdash; <?= htmlspecialchars($weekday) ?> <?= $date_str ?></h1>
+<?php
+$other_city  = $city === 'turku' ? 'helsinki' : 'turku';
+$toggle_label = $city === 'turku' ? 'Helsinki' : 'Turku';
+$toggle_url   = '?city=' . $other_city . ($offset ? '&d=1' : '');
+?>
+<div class="page-header">
+  <h1>Lounaat &mdash; <?= htmlspecialchars($weekday) ?> <?= $date_str ?></h1>
+  <div class="city-toggle"><a href="<?= $toggle_url ?>"><?= $toggle_label ?> &rarr;</a></div>
+</div>
 
 <?php if ($show_nav): ?>
 <div class="day-nav">
