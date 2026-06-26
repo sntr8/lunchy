@@ -478,7 +478,7 @@ $fetched_at = date('H:i');
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Lounaat &mdash; <?= htmlspecialchars($weekday) ?> <?= $date_str ?></title>
+<title>Lunchy</title>
 <style>
 *{box-sizing:border-box;margin:0;padding:0}
 body{background:#fff;color:#111;font-family:ui-monospace,'Cascadia Code','Courier New',monospace;font-size:14px;line-height:1.65;max-width:800px;margin:0 auto;padding:20px 16px 60px}
@@ -513,7 +513,7 @@ $toggle_label = $city === 'turku' ? 'Helsinki' : 'Turku';
 $toggle_url   = '?city=' . $other_city . ($offset ? '&d=1' : '');
 ?>
 <div class="page-header">
-  <h1>Lounaat &mdash; <?= htmlspecialchars($weekday) ?> <?= $date_str ?></h1>
+  <h1>Lunchy &mdash; <?= ucfirst($city) ?> &mdash; <?= htmlspecialchars($weekday) ?> <?= $date_str ?></h1>
   <div class="city-toggle"><a href="<?= $toggle_url ?>"><?= $toggle_label ?> &rarr;</a></div>
 </div>
 
