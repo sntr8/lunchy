@@ -199,7 +199,7 @@ function lines_for_day(array $lines, string $day_l, bool &$has_days): array {
 }
 
 function lines_to_items(array $lines): array {
-    $skip = '/^(viikko|viikon (lounas|alkuruoka|p)|tarjolla|lounas ?pöytä|take away|menu du jour|päivän lounas|koko viikon lista|lounasmenu|business lunch|etkö löytänyt|\*{3}|[LGVM]+ *= |lounaspöytään|talon (leip|jälki)|\bklo \d|\d+ ruokalajia|www\.|lounas tarjolla|lounaalla|lounas tarjoillaan|lounas sisältää|huom|nobi business|mystery of|à la carte|a la carte|lounasaikaan)/iu';
+    $skip = '/^(viikko|viikon (lounas|alkuruoka|p)|tarjolla|lounas ?pöytä|take away|menu du jour|päivän lounas|koko viikon lista|lounasmenu|business lunch|etkö löytänyt|tutustu|turun lounaat|\*{3}|[LGVM]+ *= |lounaspöytään|talon (leip|jälki)|\bklo \d|\d+ ruokalajia|www\.|lounas tarjolla|lounaalla|lounas tarjoillaan|lounas sisältää|huom|nobi business|mystery of|à la carte|a la carte|lounasaikaan)/iu';
     $out = []; $cur = null;
     foreach ($lines as $l) {
         if (strlen($l) < 3 || mb_stripos($l, 'salaattipöytä') !== false || preg_match($skip, $l)) continue;
@@ -267,19 +267,21 @@ function parse_roots(string $html): array {
     }
     // Pass 1: assemble titles and descs without prices so continuation checks work
     foreach ($pairs as $p) {
-        if ($p['cat'] === 'lisäke' && !empty($items) && !$items[count($items) - 1]['desc']) {
-            $items[count($items) - 1]['desc'] = $p['dish'];
-        } elseif ($p['cat'] === '' && !empty($items) && str_ends_with($items[count($items) - 1]['title'], ',')) {
-            $items[count($items) - 1]['title'] .= ' ' . $p['dish'];
+        $last = count($items) - 1;
+        if ($p['cat'] === 'lisäke' && $last >= 0) {
+            // Append side to previous item's desc
+            $items[$last]['desc'] .= ($items[$last]['desc'] ? ', ' : '') . $p['dish'];
+        } elseif ($p['cat'] === '' && $last >= 0 && str_ends_with(rtrim($items[$last]['desc']), ',')) {
+            // Continuation of split dish text
+            $items[$last]['desc'] .= ' ' . $p['dish'];
+        } elseif ($p['cat'] !== '') {
+            // Category item: bold label+price as title, dish as desc
+            $price = $cat_prices[$p['cat']] ?? '';
+            $label = mb_strtoupper(mb_substr($p['cat'], 0, 1, 'UTF-8')) . mb_substr($p['cat'], 1, null, 'UTF-8');
+            $items[] = ['title' => $label . ($price ? ' ' . $price : ''), 'desc' => $p['dish']];
         } else {
-            $items[] = ['title' => $p['dish'], 'desc' => '', '_cat' => $p['cat']];
+            $items[] = ['title' => $p['dish'], 'desc' => ''];
         }
-    }
-    // Pass 2: append price to each title based on category
-    foreach ($items as &$item) {
-        $price = $cat_prices[$item['_cat'] ?? ''] ?? '';
-        if ($price) $item['title'] .= ' ' . $price;
-        unset($item['_cat']);
     }
     return $items;
 }
