@@ -2,6 +2,7 @@
 date_default_timezone_set('Europe/Helsinki');
 define('CACHE', sys_get_temp_dir() . '/lunchy');
 define('TTL', 7200);
+define('STALE_MAX', 4 * 24 * 3600); // don't serve a failed-refetch fallback older than this
 
 $today_dow = (int)date('N');
 $offset    = ($today_dow < 5 && isset($_GET['d'])) ? 1 : 0; // only allow +1 on Mon–Thu
@@ -21,6 +22,7 @@ if (isset($_GET['city']) && in_array($_GET['city'], ['turku', 'helsinki'], true)
     exit;
 }
 $city = $_COOKIE['lunchy_city'] ?? 'turku';
+header('Cache-Control: no-store');
 
 function fetch(string $url, bool $force = false, bool $ssl_verify = true): ?string {
     @mkdir(CACHE, 0755, true);
@@ -38,7 +40,9 @@ function fetch(string $url, bool $force = false, bool $ssl_verify = true): ?stri
     $html = curl_exec($ch);
     curl_close($ch);
     if ($html && strlen($html) > 500) { @file_put_contents($f, $html); return $html; }
-    return is_file($f) ? (file_get_contents($f) ?: null) : null;
+    if (is_file($f) && (time() - filemtime($f)) < STALE_MAX)
+        return file_get_contents($f) ?: null;
+    return null;
 }
 
 // Squarespace menu-block parser (Blanko, Nera)
