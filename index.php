@@ -413,6 +413,29 @@ function parse_lime_leaf(string $html, string $day_l): array {
     return $items;
 }
 
+// Briossi: GoDaddy site, weekly soup list in a single description block with Ma/Ti/Ke/To/Pe headers
+function parse_briossi(string $html, string $day_s): array {
+    $clean = strip_page($html);
+    $pos = strpos($clean, 'LOUNASKEITOT');
+    if ($pos === false) return [];
+    $chunk = substr($clean, $pos, 6000);
+    $hr = strpos($chunk, '<hr');
+    if ($hr !== false) $chunk = substr($chunk, 0, $hr);
+    $lines = html_to_lines($chunk);
+    $out = []; $active = false;
+    foreach ($lines as $l) {
+        $ll = mb_strtolower($l);
+        if (mb_strlen($ll) === 2 && preg_match('/^(ma|ti|ke|to|pe|la|su)$/u', $ll)) {
+            $active = ($ll === $day_s);
+            continue;
+        }
+        if ($active && strlen($l) > 2 && !preg_match('/^(lounassuosituksiin|keitto tarjoillaan)/iu', $l)) {
+            $out[] = ['title' => $l, 'desc' => ''];
+        }
+    }
+    return $out;
+}
+
 // --- Build cards ---
 $cards = [];
 
@@ -472,6 +495,12 @@ if ($city === 'turku') {
         $items = parse_lime_leaf($html, $day_l);
         $llprice = preg_match('/Arkisin[^€<]*?(\d+[,.]\d+)\s*€/iu', strip_tags($html), $m) ? $m[1] . ' €' : '';
         if ($items) $cards[] = ['name' => 'Lime Leaf', 'url' => 'https://limerestaurants.fi/lime-leaf-lounas/', 'items' => $items, 'hours' => '11–15', 'price' => $llprice];
+    }
+    if ($is_wd && ($html = fetch('https://briossi.com/', $refresh))) {
+        $items = parse_briossi($html, $day_s);
+        $bpos = strpos($html, 'LOUNASKEITOT');
+        $bprice = ($bpos !== false && preg_match('/(\d+,\d{2})\s*€/u', substr($html, $bpos, 100), $m)) ? $m[1] . ' €' : '';
+        if ($items) $cards[] = ['name' => 'Briossi', 'url' => 'https://briossi.com/', 'items' => $items, 'hours' => '11–15', 'price' => $bprice];
     }
 }
 
