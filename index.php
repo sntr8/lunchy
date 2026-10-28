@@ -34,7 +34,7 @@ function fetch(string $url, bool $force = false, bool $ssl_verify = true): ?stri
         CURLOPT_RETURNTRANSFER => true,
         CURLOPT_USERAGENT      => 'Mozilla/5.0 (Linux) AppleWebKit/537.36 Chrome/125.0 Safari/537.36',
         CURLOPT_FOLLOWLOCATION => true,
-        CURLOPT_TIMEOUT        => 15,
+        CURLOPT_TIMEOUT        => 5,
         CURLOPT_SSL_VERIFYPEER => $ssl_verify,
     ]);
     $html = curl_exec($ch);
@@ -260,7 +260,12 @@ function parse_roots(string $html): array {
     $items = [];
     $cat_words = ['lämmin','lisäke','salaatti','keitto','viikon keitto','keittopäivä','jälkiruoka','kylmä','kasvis','perjantaiburger'];
     $pairs = [];
-    foreach ($xp->query('.//*[@dir="auto"]', $today->item(0)) as $el) {
+    // Leaf dir="auto" nodes only. The page wraps each day's dishes in a chain
+    // of nested dir="auto" divs (pasted from a social post), so matching every
+    // dir="auto" node also matched ~7 wrappers per day, each of whose
+    // textContent is the whole day's menu concatenated. That rendered the full
+    // menu over and over above the real per-dish rows.
+    foreach ($xp->query('.//*[@dir="auto"][not(.//*[@dir="auto"])]', $today->item(0)) as $el) {
         $t = trim(preg_replace('/\s+/', ' ', $el->textContent));
         if (!$t) continue;
         $colon = strpos($t, ':');
