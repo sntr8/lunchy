@@ -251,14 +251,28 @@ function parse_roots(string $html): array {
     $cat_prices = [];
     foreach ($xp->query('//h4') as $h4) {
         $t = $h4->textContent;
-        if (!isset($cat_prices['lämmin'])       && preg_match('/\blämmin ruoka\s+(\d+[,.]\d+|\d+)\s*€/iu', $t, $m))  $cat_prices['lämmin'] = $m[1] . ' €';
-        if (!isset($cat_prices['salaatti'])      && preg_match('/\bsalaatti\s+(\d+[,.]\d+|\d+)\s*€/iu', $t, $m))      $cat_prices['salaatti'] = $m[1] . ' €';
-        if (!isset($cat_prices['viikon keitto']) && preg_match('/\bkeitto\s+(\d+[,.]\d+|\d+)\s*€/iu', $t, $m))         $cat_prices['viikon keitto'] = $m[1] . ' €';
-        if (!isset($cat_prices['perjantaiburger'])&& preg_match('/\bburger\s+(\d+[,.]\d+|\d+)\s*€/iu', $t, $m))        $cat_prices['perjantaiburger'] = $m[1] . ' €';
+        if (!isset($cat_prices['lämmin'])   && preg_match('/\blämmin ruoka\s+(\d+[,.]\d+|\d+)\s*€/iu', $t, $m)) $cat_prices['lämmin'] = $m[1] . ' €';
+        if (!isset($cat_prices['salaatti']) && preg_match('/\bsalaatti\s+(\d+[,.]\d+|\d+)\s*€/iu', $t, $m))     $cat_prices['salaatti'] = $m[1] . ' €';
+        if (!isset($cat_prices['keitto'])   && preg_match('/\bkeitto\s+(\d+[,.]\d+|\d+)\s*€/iu', $t, $m))       $cat_prices['keitto'] = $m[1] . ' €';
+        if (!isset($cat_prices['burger'])   && preg_match('/\bburger\s+(\d+[,.]\d+|\d+)\s*€/iu', $t, $m))        $cat_prices['burger'] = $m[1] . ' €';
     }
 
     $items = [];
-    $cat_words = ['lämmin','lisäke','salaatti','keitto','viikon keitto','keittopäivä','jälkiruoka','kylmä','kasvis','perjantaiburger'];
+    // Dish categories, matched as a substring of the label before the colon so
+    // the page's own variants work: it writes "Salaatti" some days and
+    // "Caesarsalaatti" others, "Viikon keitto" for the soup, "Burger" on
+    // Fridays. Value = price key from the h4 headers, null = no listed price.
+    // Keys are tried in order, so put the more specific word first.
+    $cat_defs = [
+        'lisäke'     => null,
+        'lämmin'     => 'lämmin',
+        'kasvis'     => null,
+        'kylmä'      => null,
+        'salaatti'   => 'salaatti',
+        'keitto'     => 'keitto',
+        'burger'     => 'burger',
+        'jälkiruoka' => null,
+    ];
     $pairs = [];
     // Leaf dir="auto" nodes only. The page wraps each day's dishes in a chain
     // of nested dir="auto" divs (pasted from a social post), so matching every
@@ -269,17 +283,17 @@ function parse_roots(string $html): array {
         $t = trim(preg_replace('/\s+/', ' ', $el->textContent));
         if (!$t) continue;
         $colon = strpos($t, ':');
+        $cat = '';
         if ($colon !== false) {
             $before = trim(substr($t, 0, $colon));
             $after  = trim(substr($t, $colon + 1));
-            $cat_lc = mb_strtolower($before);
-            if (in_array($cat_lc, $cat_words, true) && $after)
-                $pairs[] = ['cat' => $cat_lc, 'dish' => $after];
-            else
-                $pairs[] = ['cat' => '', 'dish' => $t];
-        } else {
-            $pairs[] = ['cat' => '', 'dish' => $t];
+            // A category label is short; a dish sentence that happens to hold a colon is not
+            if ($after !== '' && mb_strlen($before) <= 30)
+                foreach ($cat_defs as $w => $_)
+                    if (mb_stripos($before, $w) !== false) { $cat = $w; break; }
         }
+        if ($cat !== '') $pairs[] = ['cat' => $cat, 'label' => $before, 'dish' => $after];
+        else             $pairs[] = ['cat' => '', 'label' => '', 'dish' => $t];
     }
     // Pass 1: assemble titles and descs without prices so continuation checks work
     foreach ($pairs as $p) {
@@ -291,9 +305,9 @@ function parse_roots(string $html): array {
             // Continuation of split dish text
             $items[$last]['desc'] .= ' ' . $p['dish'];
         } elseif ($p['cat'] !== '') {
-            // Category item: bold label+price as title, dish as desc
-            $price = $cat_prices[$p['cat']] ?? '';
-            $label = mb_strtoupper(mb_substr($p['cat'], 0, 1, 'UTF-8')) . mb_substr($p['cat'], 1, null, 'UTF-8');
+            // Category item: the page's own label plus price as title, dish as desc
+            $price = isset($cat_defs[$p['cat']]) ? ($cat_prices[$cat_defs[$p['cat']]] ?? '') : '';
+            $label = mb_strtoupper(mb_substr($p['label'], 0, 1, 'UTF-8')) . mb_substr($p['label'], 1, null, 'UTF-8');
             $items[] = ['title' => $label . ($price ? ' ' . $price : ''), 'desc' => $p['dish']];
         } else {
             $items[] = ['title' => $p['dish'], 'desc' => ''];
@@ -441,6 +455,78 @@ function parse_briossi(string $html, string $day_s): array {
     return $out;
 }
 
+// Pizzeria 450: Elementor accordion on the front page. The page carries three
+// "Katso lounasmenu tästä" blocks, the first two abandoned leftovers (one still
+// dated 25.3.), so take the last day-bearing one — that is the one being edited.
+function parse_p450(string $html, string $day_l): array {
+    libxml_use_internal_errors(true);
+    $dom = new DOMDocument();
+    @$dom->loadHTML('<?xml encoding="UTF-8">' . $html);
+    $xp    = new DOMXPath($dom);
+    $days  = 'maanantai|tiistai|keskiviikko|torstai|perjantai';
+    $block = null;
+    foreach ($xp->query('//div[contains(@class,"elementor-tab-content")]') as $div)
+        if (preg_match_all('/\b(' . $days . ')\b/iu', $div->textContent) >= 4) $block = $div;
+    if (!$block) return [];
+
+    $items = []; $active = false;
+    foreach ($xp->query('.//p', $block) as $p) {
+        $txt = trim(preg_replace('/\s+/u', ' ', str_replace("\xc2\xa0", ' ', $p->textContent)));
+        if ($txt === '') continue;
+        if (preg_match('/^(' . $days . ')\b/iu', $txt, $m)) {
+            $active = mb_strtolower($m[1]) === mb_strtolower($day_l);
+            continue;
+        }
+        if (!$active) continue;
+        // Footer below the last day: allergen note, gluten-free surcharge, meat origin
+        if (preg_match('/^(\*|pastat|pizzat|gluteenit|naudanlihan)/iu', $txt)) break;
+        foreach (p450_dishes($p) as $d) $items[] = $d;
+    }
+    return $items;
+}
+
+// Collect (bold?, text) runs in document order. Bold is <b>, <strong> or an
+// inline font-weight — the menu mixes all three, and "font-weight: inherit"
+// must not count.
+function p450_runs(DOMNode $node, bool $bold, array &$runs): void {
+    foreach ($node->childNodes as $c) {
+        if ($c->nodeType === XML_TEXT_NODE) { $runs[] = [$bold, $c->textContent]; continue; }
+        if ($c->nodeType !== XML_ELEMENT_NODE) continue;
+        $n = strtolower($c->nodeName);
+        $b = $bold || $n === 'b' || $n === 'strong'
+             || (bool)preg_match('/font-weight\s*:\s*(bold|[6-9]00)/i', $c->getAttribute('style'));
+        p450_runs($c, $b, $runs);
+    }
+}
+
+// One <p> can hold two dishes (bold name, description, bold name, description),
+// so start a new item whenever a bold run follows description text.
+function p450_dishes(DOMNode $p): array {
+    $runs = []; p450_runs($p, false, $runs);
+    $out = []; $title = ''; $desc = '';
+    $flush = function () use (&$out, &$title, &$desc) {
+        $t = trim($title); $d = trim($desc, " \t\n\r,");
+        if ($t !== '' || $d !== '')
+            $out[] = $t !== '' ? ['title' => $t, 'desc' => $d] : ['title' => $d, 'desc' => ''];
+        $title = $desc = '';
+    };
+    foreach ($runs as [$b, $t]) {
+        $t = preg_replace('/\s+/u', ' ', str_replace("\xc2\xa0", ' ', $t));
+        if (trim($t) === '') { // keep one space so words either side don't glue together
+            if ($desc !== '') $desc .= ' '; elseif ($title !== '') $title .= ' ';
+            continue;
+        }
+        if ($b) {
+            if (trim($desc) !== '') $flush();
+            $title .= $t;
+        } else {
+            $desc .= $t;
+        }
+    }
+    $flush();
+    return $out;
+}
+
 // --- Build cards ---
 $cards = [];
 
@@ -485,6 +571,11 @@ if ($city === 'turku') {
     if ($is_wd && ($ro = fetch('https://rootskitchen.fi/kasvisruokalounas-turku/', $refresh))) {
         $items = parse_roots($ro);
         if ($items) $cards[] = ['name' => 'Roots', 'url' => 'https://rootskitchen.fi/kasvisruokalounas-turku/', 'items' => $items, 'hours' => '11–14'];
+    }
+    if ($is_wd && ($html = fetch('https://pizzeria450.fi/', $refresh))) {
+        $items = parse_p450($html, $day_l);
+        $pprice = preg_match('/Hinta (\d+(?:[,.]\d+)?)\s*€/u', $html, $m) ? $m[1] . ' €' : '';
+        if ($items) $cards[] = ['name' => 'Pizzeria 450', 'url' => 'https://pizzeria450.fi/', 'items' => $items, 'hours' => '11–15', 'price' => $pprice];
     }
     if ($is_wd && ($html = fetch('https://www.panimoravintolakoulu.fi/lounas/', $refresh))) {
         $items = parse_koulu($html, $day_s, $day_l);
