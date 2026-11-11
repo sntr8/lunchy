@@ -505,7 +505,8 @@ function p450_dishes(DOMNode $p): array {
     $runs = []; p450_runs($p, false, $runs);
     $out = []; $title = ''; $desc = '';
     $flush = function () use (&$out, &$title, &$desc) {
-        $t = trim($title); $d = trim($desc, " \t\n\r,");
+        // The asterisk is the site's footnote marker for "saatavana vegaanisena"
+        $t = trim($title, " \t\n\r*"); $d = trim($desc, " \t\n\r,*");
         if ($t !== '' || $d !== '')
             $out[] = $t !== '' ? ['title' => $t, 'desc' => $d] : ['title' => $d, 'desc' => ''];
         $title = $desc = '';
